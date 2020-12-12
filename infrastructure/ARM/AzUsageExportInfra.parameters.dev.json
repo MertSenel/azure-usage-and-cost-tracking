@@ -1,0 +1,25 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "ProjectConfig": {
+            "value": {
+                "projCode": "auepoc01",
+                "env": "dev"
+            }
+        },
+        "DataTargetNames": {
+            "value": {
+                "blobContainerName": "azureusagedailyexports",
+                "storageTableName": "azureusagedetails",
+                "logAnalyticsLogType": "AzureUsageDetails"
+            }
+        },
+        "DateTimeCulture": {
+            "value": "en-AU"
+        },
+        "TaxMultiplier": {
+            "value": "1.1"
+        }
+    }
+}

@@ -1,0 +1,697 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "ProjectConfig": {
+            "type": "object",
+            "metadata": {
+                "description": "Configuration for Project Naming Prefix and Environment details"
+            }
+        },
+        "DataTargetNames": {
+            "type": "object",
+            "metadata": {
+                "description": "Names of Data Targets, such as Blob Container, Storage Table Name, Log Analytics Workspace Log Type(table name)"
+            }
+        },
+        "AppServicePlanSKU": {
+            "type": "string",
+            "defaultValue": "Dynamic",
+            "metadata": {
+                "description": "Dynamic is the Serverless Model (Consumption in Azure Terminology)"
+            }
+        },
+        "AppServicePlanSKUCode": {
+            "type": "string",
+            "defaultValue": "Y1",
+            "metadata": {
+                "description": "SKU Code for the App Service Plan"
+            }
+        },
+        "powerShellVersion": {
+            "type": "string",
+            "defaultValue": "~7",
+            "metadata": {
+                "description": "PowerShell Runtime Version"
+            }
+        },
+        "LogAnalyticsRetentionInDays": {
+            "type": "int",
+            "defaultValue": 30,
+            "metadata": {
+                "description": "30 days is the Free Data Retention Threshold for Log Analytics Workspace, if you want to increase it you can pass a larger value"
+            }
+        },
+        "DateTimeCulture": {
+            "type": "string",
+            "metadata": {
+                "description": "description"
+            }
+        },
+        "TaxMultiplier": {
+            "type": "string",
+            "metadata": {
+                "description": "description"
+            }
+        },
+        "SendGrid_APIKey": {
+            "type": "securestring",
+            "defaultValue":"",
+            "metadata": {
+                "description": "description"
+            }
+        }
+    },
+    "variables": {
+        "ResourceNames": {
+            "AppServicePlanName": "[concat(parameters('ProjectConfig').projCode,parameters('ProjectConfig').env,'asp')]",
+            "FunctionAppName": "[concat(parameters('ProjectConfig').projCode,parameters('ProjectConfig').env,'fnc')]",
+            "FunctionAppStorageAccountName": "[concat(parameters('ProjectConfig').projCode,parameters('ProjectConfig').env,'fncstr')]",
+            "AzureUsageExportStorageAccountName": "[concat(parameters('ProjectConfig').projCode,parameters('ProjectConfig').env,'str')]",
+            "ApplicationInsightsName": "[concat(parameters('ProjectConfig').projCode,parameters('ProjectConfig').env,'ais')]",
+            "LogAnalyticsWorkspaceName": "[concat(parameters('ProjectConfig').projCode,parameters('ProjectConfig').env,'oms')]",
+            "AzurePortalDashboardName": "[concat(parameters('ProjectConfig').projCode,parameters('ProjectConfig').env,'dsh')]",
+            "SendGridAccountName": "[concat(parameters('ProjectConfig').projCode,parameters('ProjectConfig').env,'sgd')]"
+        },
+        "DashboardVars": {
+            "LogAnalyticsWorkspaceName": "[variables('ResourceNames').LogAnalyticsWorkspaceName]",
+            "LogAnalyticsWorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces',variables('ResourceNames').LogAnalyticsWorkspaceName)]",
+            "Queries": {
+                "DailyCostPerRGChartQuery": "[concat('let TaxMultiplier = ',parameters('TaxMultiplier'),';workspace(\"',variables('ResourceNames').LogAnalyticsWorkspaceName,'\").',parameters('DataTargetNames').logAnalyticsLogType,'_CL | distinct *| project Currency_s, PreTaxCost_d, ResourceGroup, TimeGenerated, InstanceName_s| summarize Cost=sum(PreTaxCost_d * TaxMultiplier) by ResourceGroup, UsageDate=TimeGenerated| render columnchart with (kind=stacked)')]",
+                "DailyCostPerMeterTypeChartQuery": "[concat('let TaxMultiplier = ',parameters('TaxMultiplier'),';workspace(\"',variables('ResourceNames').LogAnalyticsWorkspaceName,'\").',parameters('DataTargetNames').logAnalyticsLogType,'_CL | distinct *| project ResourceGroup, TimeGenerated, InstanceName_s, MeterCategory_s, MeterSubcategory_s, UnitOfMeasure_s, UsageQuantity_d, PreTaxCost_d | summarize Cost=sum(PreTaxCost_d * TaxMultiplier) by UsageDate=TimeGenerated, MeterCategory=MeterCategory_s, MeterSubcategory=iff(MeterSubcategory_s==\"\",MeterCategory_s,MeterSubcategory_s)| render columnchart')]",
+                "TopCostingResourceGroupsQuery": "[concat('let TaxMultiplier = ',parameters('TaxMultiplier'),';workspace(\"',variables('ResourceNames').LogAnalyticsWorkspaceName,'\").',parameters('DataTargetNames').logAnalyticsLogType,'_CL | distinct *| project Currency_s, PreTaxCost_d, ResourceGroup, TimeGenerated, InstanceName_s | summarize Cost=sum(PreTaxCost_d * TaxMultiplier) by ResourceGroup, Currency=Currency_s | project ResourceGroup,Cost,Currency | order by Cost desc | take 10 | render table')]"
+            }
+        },
+        "sendgridPassword": "[uniqueString(variables('ResourceNames').SendGridAccountName)]"
+    },
+    "resources": [
+        {
+            "name": "[variables('ResourceNames').SendGridAccountName]",
+            "type": "Sendgrid.Email/accounts",
+            "location": "[resourceGroup().location]",
+            "apiVersion": "2015-01-01",
+            "plan": {
+                "name": "free",
+                "publisher": "Sendgrid",
+                "product": "sendgrid_azure",
+                "promotionCode": ""
+            },
+            "properties": {
+                "password": "[variables('sendgridPassword')]" ,
+                "acceptMarketingEmails": "0",
+                "email": ""
+            }
+        },
+        {
+            "apiVersion": "2018-11-01",
+            "name": "[variables('ResourceNames').FunctionAppName]",
+            "type": "Microsoft.Web/sites",
+            "kind": "functionapp",
+            "location": "[resourceGroup().location]",
+            "tags": {
+                "displayName": "Function App",
+                "ProjectCode": "[parameters('ProjectConfig').projCode]",
+                "Environment": "[parameters('ProjectConfig').env]"
+            },
+            "dependsOn": [
+                "[resourceId('microsoft.insights/components/',variables('ResourceNames').ApplicationInsightsName)]",
+                "[resourceId('Microsoft.Web/serverfarms/', variables('ResourceNames').AppServicePlanName)]",
+                "[resourceId('Microsoft.Storage/storageAccounts/', variables('ResourceNames').FunctionAppStorageAccountName)]",
+                "[resourceId('Microsoft.OperationalInsights/workspaces',variables('ResourceNames').LogAnalyticsWorkspaceName)]",
+                "[resourceId('Microsoft.Storage/storageAccounts',variables('ResourceNames').AzureUsageExportStorageAccountName)]"
+            ],
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "properties": {
+                "siteConfig": {
+                    "powerShellVersion": "[parameters('powerShellVersion')]",
+                    "appSettings": [
+                        {
+                            "name": "FUNCTIONS_EXTENSION_VERSION",
+                            "value": "~3"
+                        },
+                        {
+                            "name": "FUNCTIONS_WORKER_RUNTIME",
+                            "value": "powershell"
+                        },
+                        {
+                            "name": "FUNCTIONS_WORKER_RUNTIME_VERSION",
+                            "value": "~7"
+                        },
+                        {
+                            "name": "WEBSITE_RUN_FROM_PACKAGE",
+                            "value": "0"
+                        },
+                        {
+                            "name": "APPINSIGHTS_INSTRUMENTATIONKEY",
+                            "value": "[reference(concat('microsoft.insights/components/',variables('ResourceNames').ApplicationInsightsName), '2015-05-01').InstrumentationKey]"
+                        },
+                        {
+                            "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                            "value": "[reference(concat('microsoft.insights/components/',variables('ResourceNames').ApplicationInsightsName), '2015-05-01').ConnectionString]"
+                        },
+                        {
+                            "name": "AzureWebJobsStorage",
+                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=',variables('ResourceNames').FunctionAppStorageAccountName,';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('ResourceNames').FunctionAppStorageAccountName), '2019-06-01').keys[0].value,';EndpointSuffix=','core.windows.net')]"
+                        },
+                        {
+                            "name": "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING",
+                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=',variables('ResourceNames').FunctionAppStorageAccountName,';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('ResourceNames').FunctionAppStorageAccountName), '2019-06-01').keys[0].value,';EndpointSuffix=','core.windows.net')]"
+                        },
+                        {
+                            "name": "WEBSITE_CONTENTSHARE",
+                            "value": "[concat(toLower(variables('ResourceNames').FunctionAppName), '8619')]"
+                        },
+                        {
+                            "name": "PSWorkerInProcConcurrencyUpperBound",
+                            "value": "200000"
+                        },
+                        {
+                            "name": "FUNCTIONS_WORKER_PROCESS_COUNT",
+                            "value": "100"
+                        },
+                        {
+                            "name": "AzureCostExportsStorage",
+                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=',variables('ResourceNames').AzureUsageExportStorageAccountName,';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('ResourceNames').AzureUsageExportStorageAccountName), '2019-06-01').keys[0].value,';EndpointSuffix=','core.windows.net')]"
+                        },
+                        {
+                            "name": "AzureCostExportsContainer",
+                            "value": "[parameters('DataTargetNames').blobContainerName]"
+                        },
+                        {
+                            "name": "SubscriptionId",
+                            "value": "[subscription().subscriptionId]"
+                        },
+                        {
+                            "name": "AzUsageExportsAzureStorageTableName",
+                            "value": "[parameters('DataTargetNames').storageTableName]"
+                        },
+                        {
+                            "name": "LA_WSId",
+                            "value": "[reference(resourceId('Microsoft.OperationalInsights/workspaces/', variables('ResourceNames').LogAnalyticsWorkspaceName), '2015-03-20').customerId]"
+                        },
+                        {
+                            "name": "LA_WSKey",
+                            "value": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces/', variables('ResourceNames').LogAnalyticsWorkspaceName), '2015-03-20').primarySharedKey]"
+                        },
+                        {
+                            "name": "LA_TimeStampField",
+                            "value": "UsageDateTime"
+                        },
+                        {
+                            "name": "LA_LogType",
+                            "value": "[parameters('DataTargetNames').logAnalyticsLogType]"
+                        },
+                        {
+                            "name": "DateTimeCulture",
+                            "value": "[parameters('DateTimeCulture')]"
+                        },
+                        {
+                            "name": "TaxMultiplier",
+                            "value": "[parameters('TaxMultiplier')]"
+                        },
+                        {
+                            "name": "SendGrid_APIKey",
+                            "value": "[parameters('SendGrid_APIKey')]"
+                        }
+                    ]
+                },
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms',variables('ResourceNames').AppServicePlanName)]",
+                "clientAffinityEnabled": true
+            }
+        },
+        {
+            "apiVersion": "2018-02-01",
+            "name": "[variables('ResourceNames').AppServicePlanName]",
+            "type": "Microsoft.Web/serverfarms",
+            "location": "[resourceGroup().location]",
+            "tags": {
+                "displayName": "Consumption App Service Plan",
+                "ProjectCode": "[parameters('ProjectConfig').projCode]",
+                "Environment": "[parameters('ProjectConfig').env]"
+            },
+            "kind": "functionapp",
+            "dependsOn": [
+            ],
+            "properties": {
+            },
+            "sku": {
+                "Tier": "[parameters('AppServicePlanSKU')]",
+                "Name": "[parameters('AppServicePlanSKUCode')]"
+            }
+        },
+        {
+            "type": "microsoft.insights/components",
+            "apiVersion": "2020-02-02-preview",
+            "name": "[variables('ResourceNames').ApplicationInsightsName]",
+            "location": "[resourceGroup().location]",
+            "tags": {
+                "displayName": "Application Insights",
+                "ProjectCode": "[parameters('ProjectConfig').projCode]",
+                "Environment": "[parameters('ProjectConfig').env]"
+            },
+            "kind": "web",
+            "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces',variables('ResourceNames').LogAnalyticsWorkspaceName)]"
+            ],
+            "properties": {
+                "Application_Type": "web",
+                "Flow_Type": "Bluefield",
+                "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces',variables('ResourceNames').LogAnalyticsWorkspaceName)]"
+            }
+        },
+        {
+            "apiVersion": "2019-06-01",
+            "type": "Microsoft.Storage/storageAccounts",
+            "name": "[variables('ResourceNames').FunctionAppStorageAccountName]",
+            "location": "[resourceGroup().location]",
+            "tags": {
+                "displayName": "Function App Storage Account",
+                "ProjectCode": "[parameters('ProjectConfig').projCode]",
+                "Environment": "[parameters('ProjectConfig').env]"
+            },
+            "sku": {
+                "name": "Standard_LRS"
+            },
+            "properties": {
+                "supportsHttpsTrafficOnly": true,
+                "minimumTlsVersion": "TLS1_2",
+                "allowBlobPublicAccess": false
+            }
+        },
+        {
+            "apiVersion": "2019-06-01",
+            "type": "Microsoft.Storage/storageAccounts",
+            "name": "[variables('ResourceNames').AzureUsageExportStorageAccountName]",
+            "location": "[resourceGroup().location]",
+            "tags": {
+                "displayName": "Azure Usage Exports Storage Account",
+                "ProjectCode": "[parameters('ProjectConfig').projCode]",
+                "Environment": "[parameters('ProjectConfig').env]"
+            },
+            "sku": {
+                "name": "Standard_LRS"
+            },
+            "properties": {
+                "supportsHttpsTrafficOnly": true,
+                "minimumTlsVersion": "TLS1_2",
+                "allowBlobPublicAccess": false
+            },
+            "resources": [
+                {
+                    "type": "blobServices/containers",
+                    "apiVersion": "2020-08-01-preview",
+                    "name": "[concat('/default/',parameters('DataTargetNames').blobContainerName)]",
+                    "dependsOn": [
+                        "[resourceId('Microsoft.Storage/storageAccounts', variables('ResourceNames').AzureUsageExportStorageAccountName)]"
+                    ]
+                },
+                {
+                    "type": "tableServices/tables",
+                    "apiVersion": "2020-08-01-preview",
+                    "name": "[concat('/default/',parameters('DataTargetNames').storageTableName)]",
+                    "dependsOn": [
+                        "[resourceId('Microsoft.Storage/storageAccounts', variables('ResourceNames').AzureUsageExportStorageAccountName)]"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "[variables('ResourceNames').LogAnalyticsWorkspaceName]",
+            "type": "Microsoft.OperationalInsights/workspaces",
+            "apiVersion": "2020-03-01-preview",
+            "tags": {
+                "displayname": "Log Analytics Workspace",
+                "ProjectCode": "[parameters('ProjectConfig').projCode]",
+                "Environment": "[parameters('ProjectConfig').env]"
+            },
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "sku": {
+                    "name": "PerGB2018",
+                    "retentionInDays": "[parameters('LogAnalyticsRetentionInDays')]"
+                }
+            }
+        },
+        {
+            "name": "[variables('ResourceNames').AzurePortalDashboardName]",
+            "type": "Microsoft.Portal/dashboards",
+            "location": "[resourceGroup().location]",
+            "tags": {
+                "hidden-title": "Azure Usage & Cost Monitoring",
+                "displayname": "Azure Portal Dashboard "
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces',variables('ResourceNames').LogAnalyticsWorkspaceName)]"
+            ],
+            "apiVersion": "2015-08-01-preview",
+            "properties": {
+                "lenses": {
+                    "0": {
+                        "order": 0,
+                        "parts": {
+                            "0": {
+                                "position": {
+                                    "x": 0,
+                                    "y": 0,
+                                    "colSpan": 17,
+                                    "rowSpan": 4
+                                },
+                                "metadata": {
+                                    "inputs": [
+                                        {
+                                            "name": "ComponentId",
+                                            "value": {
+                                                "SubscriptionId": "[subscription().subscriptionId]",
+                                                "ResourceGroup": "[resourceGroup().name]",
+                                                "Name": "[variables('DashboardVars').LogAnalyticsWorkspaceName]",
+                                                "ResourceId": "[variables('DashboardVars').LogAnalyticsWorkspaceResourceId]"
+                                            },
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "Dimensions",
+                                            "value": {
+                                                "xAxis": {
+                                                    "name": "UsageDate",
+                                                    "type": "datetime"
+                                                },
+                                                "yAxis": [
+                                                    {
+                                                        "name": "Cost",
+                                                        "type": "real"
+                                                    }
+                                                ],
+                                                "splitBy": [
+                                                    {
+                                                        "name": "ResourceGroup",
+                                                        "type": "string"
+                                                    }
+                                                ],
+                                                "aggregation": "Sum"
+                                            },
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "Query",
+                                            "value": "[variables('DashboardVars').Queries.DailyCostPerRGChartQuery]",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "PartTitle",
+                                            "value": "Analytics",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "PartSubTitle",
+                                            "value": "[variables('DashboardVars').LogAnalyticsWorkspaceName]",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "PartId",
+                                            "value": "13783194-1103-4754-8751-374ec4dd1b12",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "Version",
+                                            "value": "1.0",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "resourceTypeMode",
+                                            "value": "workspace",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "TimeRange",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "DashboardId",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "ControlType",
+                                            "value": "FrameControlChart",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "SpecificChart",
+                                            "value": "StackedColumn",
+                                            "isOptional": true
+                                        }
+                                    ],
+                                    "type": "Extension/AppInsightsExtension/PartType/AnalyticsPart",
+                                    "settings": {
+                                        "content": {
+                                            "PartTitle": "Total Cost Per Day Split by Resource Group",
+                                            "PartSubTitle": "Actual Cost Tax Applied",
+                                            "Query": "[variables('DashboardVars').Queries.DailyCostPerRGChartQuery]"
+                                        }
+                                    }
+                                }
+                            },
+                            "1": {
+                                "position": {
+                                    "x": 0,
+                                    "y": 4,
+                                    "colSpan": 12,
+                                    "rowSpan": 4
+                                },
+                                "metadata": {
+                                    "inputs": [
+                                        {
+                                            "name": "ComponentId",
+                                            "value": {
+                                                "SubscriptionId": "[subscription().subscriptionId]",
+                                                "ResourceGroup": "[resourceGroup().name]",
+                                                "Name": "[variables('DashboardVars').LogAnalyticsWorkspaceName]",
+                                                "ResourceId": "[variables('DashboardVars').LogAnalyticsWorkspaceResourceId]"
+                                            },
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "Dimensions",
+                                            "value": {
+                                                "xAxis": {
+                                                    "name": "UsageDate",
+                                                    "type": "datetime"
+                                                },
+                                                "yAxis": [
+                                                    {
+                                                        "name": "Cost",
+                                                        "type": "real"
+                                                    }
+                                                ],
+                                                "splitBy": [
+                                                    {
+                                                        "name": "MeterCategory",
+                                                        "type": "string"
+                                                    }
+                                                ],
+                                                "aggregation": "Sum"
+                                            },
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "Query",
+                                            "value": "[variables('DashboardVars').Queries.DailyCostPerMeterTypeChartQuery]",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "PartTitle",
+                                            "value": "Analytics",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "PartSubTitle",
+                                            "value": "[variables('DashboardVars').LogAnalyticsWorkspaceName]",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "PartId",
+                                            "value": "10810f5c-1b0d-4f7c-a513-c8c186011d01",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "Version",
+                                            "value": "1.0",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "resourceTypeMode",
+                                            "value": "workspace",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "TimeRange",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "DashboardId",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "ControlType",
+                                            "value": "FrameControlChart",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "SpecificChart",
+                                            "value": "StackedColumn",
+                                            "isOptional": true
+                                        }
+                                    ],
+                                    "type": "Extension/AppInsightsExtension/PartType/AnalyticsPart",
+                                    "settings": {
+                                        "content": {
+                                            "PartTitle": "Total Cost Per Day Split by Meter Category",
+                                            "PartSubTitle": "Actual Cost Tax Applied",
+                                            "Query": "[variables('DashboardVars').Queries.DailyCostPerMeterTypeChartQuery]"
+                                        }
+                                    }
+                                }
+                            },
+                            "2": {
+                                "position": {
+                                    "x": 12,
+                                    "y": 4,
+                                    "colSpan": 5,
+                                    "rowSpan": 4
+                                },
+                                "metadata": {
+                                    "inputs": [
+                                        {
+                                            "name": "ComponentId",
+                                            "value": {
+                                                "SubscriptionId": "[subscription().subscriptionId]",
+                                                "ResourceGroup": "[resourceGroup().name]",
+                                                "Name": "[variables('DashboardVars').LogAnalyticsWorkspaceName]",
+                                                "ResourceId": "[variables('DashboardVars').LogAnalyticsWorkspaceResourceId]"
+                                            },
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "Dimensions",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "Query",
+                                            "value": "[variables('DashboardVars').Queries.TopCostingResourceGroupsQuery]",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "PartTitle",
+                                            "value": "Analytics",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "PartSubTitle",
+                                            "value": "[variables('DashboardVars').LogAnalyticsWorkspaceName]",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "PartId",
+                                            "value": "6efc76f3-3cdc-4f97-a30d-8a98061348a9",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "Version",
+                                            "value": "1.0",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "resourceTypeMode",
+                                            "value": "workspace",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "TimeRange",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "DashboardId",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "ControlType",
+                                            "value": "AnalyticsGrid",
+                                            "isOptional": true
+                                        },
+                                        {
+                                            "name": "SpecificChart",
+                                            "isOptional": true
+                                        }
+                                    ],
+                                    "type": "Extension/AppInsightsExtension/PartType/AnalyticsPart",
+                                    "settings": {
+                                        "content": {
+                                            "PartTitle": "Top 10 Costly Resource Groups",
+                                            "PartSubTitle": "Total Cost for Selected Time Period",
+                                            "Query": "[variables('DashboardVars').Queries.TopCostingResourceGroupsQuery]",
+                                            "GridColumnsWidth": {
+                                                "Cost": "151px"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "metadata": {
+                    "model": {
+                        "timeRange": {
+                            "value": {
+                                "relative": {
+                                    "duration": 24,
+                                    "timeUnit": 1
+                                }
+                            },
+                            "type": "MsPortalFx.Composition.Configuration.ValueTypes.TimeRange"
+                        },
+                        "filterLocale": {
+                            "value": "en-us"
+                        },
+                        "filters": {
+                            "value": {
+                                "MsPortalFx_TimeRange": {
+                                    "model": {
+                                        "format": "utc",
+                                        "granularity": "auto",
+                                        "relative": "30d"
+                                    },
+                                    "displayCache": {
+                                        "name": "UTC Time",
+                                        "value": "Past 30 days"
+                                    },
+                                    "filteredPartIds": [
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ],
+    "outputs": {
+        "ResourceNames": {
+            "type": "object",
+            "value": "[variables('ResourceNames')]"
+        },
+        "DataTargetNames": {
+            "type": "object",
+            "value": "[parameters('DataTargetNames')]"
+        },
+        "DashboardVars": {
+            "type": "object",
+            "value": "[variables('DashboardVars')]"
+        },
+        "SendGrid": {
+            "type": "object",
+            "value": "[reference(resourceId('Sendgrid.Email/accounts', variables('ResourceNames').SendGridAccountName),'2015-01-01','Full')]"
+        }
+    }
+}

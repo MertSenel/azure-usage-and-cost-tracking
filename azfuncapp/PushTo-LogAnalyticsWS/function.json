@@ -1,0 +1,7 @@
+{
+    "bindings": [{
+        "name": "blobnamePrefix",
+        "type": "activityTrigger",
+        "direction": "in"
+    }]
+}
