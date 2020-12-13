@@ -24,7 +24,7 @@ try {
     Write-Output "Pushing Usage Details for Blob $($blobname) to Log Analytics Workspace"
     Write-Output "Number of Rows being pushed: $($Results.count)"
 
-    if($Result.Count -eq 0){
+    if($($Result.Count) -eq 0){
         Write-Host "Blob File is Empty. Nothing to send to Log Analytics Exiting."
         exit 0
     }

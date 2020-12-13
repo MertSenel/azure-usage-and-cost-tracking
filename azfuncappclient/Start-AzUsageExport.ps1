@@ -6,7 +6,7 @@ function Start-AzUsageExport {
         [Parameter()][string]$AzFunctionAppName = "auepoc01devfnc",
         [Parameter()][string]$httpFunctionName = "AzUsageExportHttpTrigger",
         [Parameter()][datetime]$StartDateUTC = (get-date).ToUniversalTime(),
-        [Parameter()][int]$NoOfDaysToRetroExport = 0, #Log Analytics Can Only Show up to 30 days in Default Retention
+        [Parameter()][int]$NoOfDaysToRetroExport = 7, #Log Analytics Can Only Show up to 30 days in Default Retention
         [Parameter()][switch]$localhost
     )
 
